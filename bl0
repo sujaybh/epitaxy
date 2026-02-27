@@ -1,0 +1,56 @@
+import pyvisa
+import time
+import csv
+
+# Configuration
+GPIB_ADDRESS = 'GPIB0::17::INSTR' # Factory set address is 17 [cite: 3]
+LOG_FILENAME = 'hp4280a_standard_mode.csv'
+
+def run_standard_mode():
+    rm = pyvisa.ResourceManager()
+    try:
+        # Open connection
+        instr = rm.open_resource(GPIB_ADDRESS)
+        instr.timeout = 10000 
+        
+        # 1. Initialize for Standard Mode
+        instr.write("BC")   # Buffer Clear 
+        instr.write("BL0")  # Standard Data Transfer Mode 
+        instr.write("TR3")  # Trigger Hold mode 
+        instr.write("FN2")  # Function: C measurement (or C-V) [cite: 27]
+        
+        # 2. Setup Sweep Parameters
+        # PS: Start, PP: Stop, PE: Step, PL: Hold, PD: Delay [cite: 48]
+        instr.write("PS-5, PP5, PE.5, PL3E-3, PD3E-3") [cite: 59, 88]
+        
+        # 3. Execution Loop
+        # In BL0, we often use SW1 and then read points one by one
+        instr.write("SW1") # Start Sweep 
+        
+        print("Commencing readings in Standard Mode...")
+        
+        with open(LOG_FILENAME, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(["Timestamp", "Data"])
+
+            # We know from your previous BS? that there are 21 points
+            for i in range(21):
+                # Poll for Data Ready bit (Bit 0) 
+                while not (instr.stb & 1):
+                    time.sleep(0.1)
+                
+                # Read a single measurement line
+                # Format per Table 3-33: C Data, Comma, V Data, CRLF 
+                reading = instr.read().strip()
+                print(f"Point {i+1}: {reading}")
+                writer.writerow([time.time(), reading])
+
+        print(f"Data successfully saved to {LOG_FILENAME}")
+
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        instr.close()
+
+if __name__ == "__main__":
+    run_standard_mode()
