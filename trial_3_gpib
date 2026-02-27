@@ -4,37 +4,41 @@ import time
 rm = pyvisa.ResourceManager()
 instr = rm.open_resource('GPIB0::17::INSTR')
 
-# 1. Set a long timeout and clear the buffer
+# Increase timeout and clear buffers
 instr.timeout = 20000 
-instr.write("BC") # Buffer Clear 
+instr.write("BC") 
 
-# 2. Configure the 4280A
-instr.write("TR3, IB2, BL1") # [cite: 27, 33, 38]
-instr.write("PS-5, PP5, PE.5, PL3E-3, PD3E-3") # [cite: 48, 59]
-instr.write("SW1") # Start Sweep [cite: 33]
+# Re-send setup to ensure clean state
+instr.write("TR3, IB2, BL1")
+instr.write("PS-5, PP5, PE.5, PL3E-3, PD3E-3")
+instr.write("SW1")
 
-print("Sweeping...")
-
-# 3. Wait for Data Ready bit
-while not (instr.stb & 1): # [cite: 43]
+print("Waiting for sweep...")
+while not (instr.stb & 1):
     time.sleep(0.5)
 
-# 4. Handle the BS? response carefully
-# Instead of query(), we write and read separately to control the flow
+# 1. Get the Block Status (This usually works because it's short)
 instr.write("BS?")
-block_info = instr.read() 
-print(f"Block Info: {block_info}") # Should be NM0021...
+meta = instr.read().strip()
+print(f"Metadata received: {meta}")
 
-# 5. Read the actual measurement data
-# If read() still fails, we try read_raw() to see exactly what the machine is sending
+# 2. THE FIX: Read the entire block at once as raw bytes
+# Instead of read() which looks for \n, we pull a large chunk
 try:
-    # Standard ASCII read
-    data = instr.read()
-    print("Measurement Data:")
-    print(data)
-except pyvisa.errors.VisaIOError:
-    print("Standard read timed out. Trying raw read...")
-    raw_data = instr.read_raw()
-    print(raw_data)
+    # We ask for 1024 bytes (enough for 21 readings) 
+    # and let the GPIB EOI (End of Identity) signal terminate the read.
+    raw_payload = instr.read_bytes(1024, break_on_termchar=False)
+    
+    # Convert bytes to string and split by the comma delimiters 
+    # mentioned in Table 3-33 
+    decoded_data = raw_payload.decode('ascii')
+    data_points = decoded_data.split(',')
+    
+    print(f"Successfully captured {len(data_points)} segments.")
+    for idx, val in enumerate(data_points):
+        print(f"Reading {idx+1}: {val}")
+        
+except Exception as e:
+    print(f"Read failed: {e}")
 
 instr.close()
