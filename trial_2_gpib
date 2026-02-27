@@ -1,0 +1,72 @@
+import pyvisa
+import time
+import csv
+
+# Configuration
+GPIB_ADDRESS = 'GPIB0::24::INSTR'
+LOG_FILENAME = 'hp4280a_sweep_results.csv'
+
+def run_advanced_sweep():
+    rm = pyvisa.ResourceManager()
+    try:
+        instr = rm.open_resource(GPIB_ADDRESS)
+        # Set long timeout for the sweep and data transfer
+        instr.timeout = 25000 
+        
+        # 1. Initialization & Setup
+        instr.clear() # CLEAR Hp4280a
+        # TR3: Trigger Hold, BC: Buffer Clear, IB2: Int Bias [cite: 27, 33, 38]
+        instr.write("TR3, BC, IB2")
+        
+        # 2. Configure Sweep parameters [cite: 48, 59]
+        # Start -5V, Stop 5V, Step 0.5V, Hold/Delay 3ms
+        instr.write("PS-5, PP5, PE.5, PL3E-3, PD3E-3")
+        
+        # 3. Enable Block Mode and Start 
+        instr.write("BL1") # Block Data Transfer Mode
+        instr.write("MD1") # Data Ready SRQ mask off 
+        instr.write("SW1") # Start Sweep [cite: 33]
+        
+        print("Sweep started. Waiting for 'Data Ready' status...")
+
+        # 4. Wait for Data Ready (Bit 0 of Status Byte) 
+        while not (instr.stb & 1):
+            time.sleep(0.5)
+            
+        # 5. Handle the Block Status
+        # The NMXXXX value tells us how many readings to expect 
+        block_status = instr.query("BS?")
+        print(f"Instrument Status: {block_status}")
+        
+        # Extract number of readings (e.g., NM0021 -> 21)
+        try:
+            num_readings = int(block_status.split(',')[0].replace('NM', ''))
+        except:
+            num_readings = 21 # Fallback to your DIM size
+            
+        # 6. Retrieve and Log Data
+        print(f"Reading {num_readings} data points...")
+        all_data = []
+        
+        with open(LOG_FILENAME, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(["Timestamp", "Reading_Index", "Raw_Data"])
+            
+            for i in range(num_readings):
+                # Reading one by one prevents the 'Timeout' on large blocks
+                point = instr.read().strip()
+                all_data.append(point)
+                writer.writerow([time.time(), i+1, point])
+                
+        print(f"Successfully logged to {LOG_FILENAME}")
+        return all_data
+
+    except pyvisa.errors.VisaIOError as e:
+        print(f"VISA Error: {e}")
+    finally:
+        instr.close()
+
+if __name__ == "__main__":
+    results = run_advanced_sweep()
+    if results:
+        print("First 3 points:", results[:3])
